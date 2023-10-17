@@ -1,0 +1,443 @@
+---
+title: "STAT628 - Module 2"
+author: "Osama Kheshaifaty"
+date: "2023-10-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Load Data and Initial Exploration
+
+
+```{r load-data, message=FALSE, warning=FALSE}
+# Load necessary libraries
+library(tidyverse)
+
+# Load the dataset
+df <- read.csv("BodyFat.csv")
+
+# Create dataframe for all predictors of interest 
+selected_df <- df %>% select(BODYFAT, AGE, WEIGHT, HEIGHT, NECK, ABDOMEN, CHEST, BICEPS)
+
+```
+
+## Plotting Histograms for Selected Features
+
+```{r plot-histograms, message=FALSE, warning=FALSE}
+# Create the plot for selected_df
+ggplot(gather(selected_df, key = "Feature", value = "Value"), aes(x = Value)) +
+  geom_histogram(binwidth = 5, fill = "blue", alpha = 0.7) +
+  facet_wrap(~ Feature, ncol = 2, nrow = 4) +
+  labs(title = "Histograms of Selected Features",
+       x = "Value",
+       y = "Frequency") +
+  theme_minimal()
+```
+
+Libraries: We load the tidyverse package, which includes ggplot2 for plotting and dplyr for data manipulation.
+
+Read CSV: The read.csv function is used to read the data from "BodyFat.csv" into a dataframe named df.
+
+Select Columns: We use dplyr's select function to choose only the columns you're interested in. This creates a new dataframe selected_df.
+
+Plotting: We first use gather from the tidyverse package to transform the data from wide to long format. This makes it easier to plot using ggplot2. Then we create a histogram for each feature and use facet_wrap to arrange the histograms in a grid with 2 columns and 4 rows.
+
+## Handling Outliers
+
+```{r handle-outliers, message=FALSE, warning=FALSE}
+
+# Remove specified outliers in 'WEIGHT' and 'HEIGHT'
+selected_df <- selected_df %>% 
+  filter(WEIGHT != 363.15, HEIGHT != 29.5)
+
+# Remove outliers based on IQR for other selected columns
+cols_to_check <- c("BODYFAT", "AGE", "NECK", "ABDOMEN", "CHEST", "BICEPS")
+for (col in cols_to_check) {
+  Q1 <- quantile(selected_df[[col]], 0.25)
+  Q3 <- quantile(selected_df[[col]], 0.75)
+  IQR <- Q3 - Q1
+  lower_bound <- Q1 - 1.5 * IQR
+  upper_bound <- Q3 + 1.5 * IQR
+  
+  selected_df <- selected_df %>% 
+    filter(between(!!sym(col), lower_bound, upper_bound))
+}
+
+# Create dataframs for the 3 additional combinations of predictors (the 5 agreen on in common literature, and CHEST&BICEPS as we found them storngly correlated to bodyfat, and they provide new information to the model (i.e. anatomically)
+
+selected_df_A <- selected_df %>% select(BODYFAT, AGE, WEIGHT, HEIGHT, NECK, ABDOMEN)
+selected_df_B <- selected_df %>% select(BODYFAT, AGE, WEIGHT, HEIGHT, NECK, ABDOMEN, CHEST)
+selected_df_C <- selected_df %>% select(BODYFAT, AGE, WEIGHT, HEIGHT, NECK, ABDOMEN, BICEPS)
+```
+
+
+## Re-plotting Histograms with Outliers Removed
+
+```{r replot-histograms-auto-adjust, message=FALSE, warning=FALSE}
+# Create the plot
+ggplot(gather(selected_df, key = "Feature", value = "Value"), aes(x = Value)) +
+  geom_histogram(aes(binwidth = (max(Value) - min(Value)) / 30), fill = "blue", alpha = 0.7) +
+  facet_wrap(~ Feature, ncol = 2, nrow = 4, scales = "free_x") +
+  labs(title = "Histograms of Selected Features with Outliers Removed",
+       x = "Value",
+       y = "Frequency") +
+  theme_minimal()
+```
+## Building Linear Regression Models
+
+We will build two linear regression models to predict body fat percentage using selected features. We will evaluate these models using two different methods: an 80-20 train-test split and k-fold cross-validation.
+
+### Libraries Needed
+```{r load-libraries, message=FALSE, warning=FALSE}
+library(caret)
+library(tidyverse)
+```
+
+### 80-20 Train-Test Split
+
+```{r 80-20-split, message=FALSE, warning=FALSE}
+set.seed(123)
+# Create training and test datasets
+train_index <- createDataPartition(selected_df$BODYFAT, p = 0.8, list = FALSE)
+train_set <- selected_df[train_index,]
+test_set <- selected_df[-train_index,]
+
+# Build the model on the training set
+fit_train <- lm(BODYFAT ~ AGE + WEIGHT + HEIGHT + NECK + ABDOMEN, data = train_set)
+
+# Make predictions on the test set
+predictions <- predict(fit_train, newdata = test_set)
+
+# Evaluate the model
+test_results <- data.frame(Actual = test_set$BODYFAT, Predicted = predictions)
+test_RMSE <- sqrt(mean((test_results$Actual - test_results$Predicted)^2))
+```
+
+In this model, the Root Mean Square Error (RMSE) for the test set is `r round(test_RMSE, 2)`.
+
+Model Evaluation:
+Actual vs Predicted Plot
+
+```{r}
+plot(test_set$BODYFAT, predictions, xlab = "Actual", ylab = "Predicted", main = "Actual vs Predicted")
+abline(a = 0, b = 1, col = "red")
+```
+
+Residual Plot
+
+```{r}
+residuals_tt <- test_set$BODYFAT - predictions
+plot(predictions, residuals_tt, xlab = "Fitted Values", ylab = "Residuals", main = "Residual Plot (80-20 Split)")
+abline(h = 0, col = "red")
+```
+
+### k-Fold Cross-Validation with basic 5 features
+
+```{r k-fold-cv, message=FALSE, warning=FALSE}
+# Define training control
+train_control_D <- trainControl(method = "cv", number = 10)
+
+# Build the model with k-fold cross-validation
+fit_cv_D <- train(BODYFAT ~ AGE + WEIGHT + HEIGHT + NECK + ABDOMEN + CHEST + BICEPS,
+                data = selected_df, 
+                method = "lm",
+                trControl = train_control)
+
+# Extract the RMSE from k-fold cross-validation
+cv_RMSE_D <- fit_cv$results$RMSE[1]
+
+#A
+
+train_control_A <- trainControl(method = "cv", number = 10)
+
+# Build the model with k-fold cross-validation
+fit_cv_A <- train(BODYFAT ~ AGE + WEIGHT + HEIGHT + NECK + ABDOMEN,
+                data = selected_df, 
+                method = "lm",
+                trControl = train_control)
+
+# Extract the RMSE from k-fold cross-validation
+cv_RMSE_A <- fit_cv$results$RMSE[1]
+
+# B
+
+train_control_B <- trainControl(method = "cv", number = 10)
+
+# Build the model with k-fold cross-validation
+fit_cv_B <- train(BODYFAT ~ AGE + WEIGHT + HEIGHT + NECK + ABDOMEN + CHEST,
+                data = selected_df, 
+                method = "lm",
+                trControl = train_control)
+
+# Extract the RMSE from k-fold cross-validation
+cv_RMSE_B <- fit_cv$results$RMSE[1]
+
+# C
+
+train_control_C <- trainControl(method = "cv", number = 10)
+
+# Build the model with k-fold cross-validation
+fit_cv_C <- train(BODYFAT ~ AGE + WEIGHT + HEIGHT + NECK + ABDOMEN + BICEPS,
+                data = selected_df, 
+                method = "lm",
+                trControl = train_control)
+
+# Extract the RMSE from k-fold cross-validation
+cv_RMSE_C <- fit_cv$results$RMSE[1]
+```
+```{r}
+# Calculate R^2 for each model
+r2_A = summary(fit_cv_A)$r.squared
+r2_B = summary(fit_cv_B)$r.squared
+r2_C = summary(fit_cv_C)$r.squared
+r2_D = summary(fit_cv_D)$r.squared
+
+# Calculate RMSE for each model
+rmse_A = sqrt(mean(resid(fit_cv_A)^2))
+rmse_B = sqrt(mean(resid(fit_cv_B)^2))
+rmse_C = sqrt(mean(resid(fit_cv_C)^2))
+rmse_D = sqrt(mean(resid(fit_cv_D)^2))
+
+# Calculate Adjusted R^2 for each model
+adj_r2_A = summary(fit_cv_A)$adj.r.squared
+adj_r2_B = summary(fit_cv_B)$adj.r.squared
+adj_r2_C = summary(fit_cv_C)$adj.r.squared
+adj_r2_D = summary(fit_cv_D)$adj.r.squared
+
+# Create a data frame to hold all these values
+library(DT)
+
+# Your existing comparison table, rounded to 2 decimal places
+comparison_table = data.frame(
+  Model = c("fit_cv_A", "fit_cv_B", "fit_cv_C", "fit_cv_D"),
+  R2 = round(c(r2_A, r2_B, r2_C, r2_D), 2),
+  RMSE = round(c(rmse_A, rmse_B, rmse_C, rmse_D), 2),
+  Adj_R2 = round(c(adj_r2_A, adj_r2_B, adj_r2_C, adj_r2_D), 2)
+)
+
+# Display the table using datatable
+datatable(comparison_table, 
+          options = list(
+            paging = FALSE, 
+            searching = FALSE),
+          caption = "Model Comparison Summary")
+
+```
+
+In this model, the average RMSE obtained from 10-fold cross-validation is `r round(cv_RMSE, 2)`.
+
+Model Evaluation:
+Actual vs Predicted Plot
+
+```{r}
+# Predict on the entire dataset
+predictions_cv <- predict(fit_cv, newdata = selected_df)
+
+# Actual vs Predicted
+plot(selected_df$BODYFAT, predictions_cv, xlab = "Actual", ylab = "Predicted", main = "Actual vs Predicted (CV)")
+abline(a = 0, b = 1, col = "red")
+```
+
+Residual Plot
+
+```{r}
+# Calculate residuals
+residuals_cv <- selected_df$BODYFAT - predictions_cv
+
+# Residual Plot
+plot(predictions_cv, residuals_cv, xlab = "Predicted", ylab = "Residuals", main = "Residual vs Predicted (CV)")
+abline(h = 0, col = "red")
+```
+### Model Comparison
+
+We have two RMSE values, one from the 80-20 train-test split (`r round(test_RMSE, 2)`) and another from k-fold cross-validation (`r round(cv_RMSE, 2)`).
+
+Both of these evaluation methods provide similar RMSE values, indicating that the model's performance is consistent regardless of the evaluation method used. This suggests that our model is both robust and reliable for predicting body fat percentage.
+
+# STAT628: Data Science Practicum - Body Fat Prediction
+
+## Introduction
+
+The goal of this project is to develop a simple, robust, and accurate "rule-of-thumb" to estimate the percentage of body fat using clinically available measurements. The data consists of 252 men with various body measurements. We aim to find an effective predictive model that balances simplicity, robustness, and accuracy.
+
+## Data Preprocessing
+
+### Cleaning and Outlier Handling
+
+We observed a few outliers in the dataset. To maintain data quality, these were removed or corrected. Outliers were identified through histograms and statistical methods.
+
+### Feature Selection
+
+Based on literature review and common practices in body fat calculation, we chose the following predictors: Height, Weight, Waist (Abdomen), and Neck measurements, along with Age. 
+
+## Model Building and Evaluation
+
+We initially considered a simple linear regression model with an 80-20 train-test split. However, given the limited size of the dataset (252 observations), we opted for k-fold cross-validation to make the most of our data. 
+
+### Why k-Fold Cross-Validation?
+
+- **Optimal use of Data**: k-Fold CV ensures that every observation is used for validation exactly once.
+  
+- **Model Stability**: By taking the average of k different models, we achieve a model estimate that's less sensitive to the train-test split.
+
+### Model Evaluation Plots
+
+We used 'Actual vs Predicted' plots and 'Residual plots' to visualize how well our model is performing.
+
+## Conclusion
+
+Through this project, we aimed to develop a simple yet robust model for predicting body fat percentages. After data cleaning and feature selection, we moved on to model building.
+
+We chose linear regression implemented through k-fold cross-validation for our final model. The k-fold cross-validation method was especially useful for making optimal use of a small dataset and providing a more stable and robust model. The RMSE from the k-fold cross-validation served as a reliable metric for evaluating the model's performance.
+
+Given the balanced trade-off between simplicity, robustness, and accuracy, we are confident in the utility of our final model for practical, clinical applications.
+
+--------------------------------
+
+## Correlation Analysis
+
+Before proceeding to model building, it's important to examine the correlations among the predictors. This helps us to understand the relationships between different variables and also to detect multicollinearity, which can be problematic in linear regression models.
+
+### Correlation Matrix
+
+We will start by computing the correlation matrix for our selected features.
+
+```{r echo=TRUE}
+# Compute the correlation matrix
+cor_matrix <- cor(selected_df[, -1])  # Excluding the "BODYFAT" column
+cor_matrix
+```
+
+### Visualization with Heatmap
+
+To make it easier to interpret these correlations, we'll visualize them using a heatmap.
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+# Load the required package
+if(!requireNamespace("ggcorrplot", quietly = TRUE)) {
+  install.packages("ggcorrplot")
+}
+library(ggcorrplot)
+
+# Generate the heatmap
+ggcorrplot(cor_matrix, hc.order = TRUE, type = "lower",
+           lab = TRUE, lab_size = 3, method="circle", 
+           colors = c("#6D9EC1", "white", "#E46726"))
+```
+
+### Interpretation
+
+- **Highly correlated variables**: If two predictors are highly correlated, say above 0.9 or below -0.9, it suggests that one can be predicted from the other with high accuracy, and they are likely to carry similar information. 
+
+- **Low or Zero correlations**: Variables with low or zero correlations are generally preferable as they provide unique information for prediction.
+
+Based on the heatmap and the correlation matrix, we can decide whether or not to keep all the predictors for our linear regression model.
+
+---------------------------------------------------------
+
+## Model Assumptions
+
+Linear regression relies on several key assumptions. Violations of these assumptions can lead to biased or misleading findings. In this section, we will check for the following assumptions:
+
+1. Linearity
+2. Normality of the errors
+3. Homoscedasticity (Equal variances)
+
+### Checking for Linearity
+
+We will plot the residuals against the fitted values to examine the linearity assumption.
+
+```{r echo=TRUE}
+# Using the train-test model for demonstration
+fit_train_test <- lm(BODYFAT ~ AGE + WEIGHT + HEIGHT + NECK + ABDOMEN, data = selected_df)
+
+# Get the fitted values and residuals
+fitted_values <- fit_train_test$fitted.values
+residuals <- fit_train_test$residuals
+
+# Create the plot
+plot(fitted_values, residuals, xlab = "Fitted Values", ylab = "Residuals", main = "Residuals vs Fitted")
+abline(h = 0, col = "red")
+```
+
+### Checking for Normality
+
+We will use a Q-Q plot to check for normality.
+
+```{r echo=TRUE}
+# Create the Q-Q plot
+qqnorm(residuals)
+qqline(residuals)
+```
+
+### Checking for Homoscedasticity
+
+Again, we use the plot of residuals against fitted values to check for homoscedasticity.
+
+```{r echo=TRUE}
+# Create the plot (Same as for Linearity)
+plot(fitted_values, residuals, xlab = "Fitted Values", ylab = "Residuals", main = "Residuals vs Fitted")
+abline(h = 0, col = "red")
+```
+
+### Interpretation
+
+- **Linearity**: If the points in the "Residuals vs Fitted" plot are randomly dispersed around the horizontal axis, a linear regression model is appropriate for the data; otherwise, a non-linear model is more appropriate.
+
+- **Normality**: In the Q-Q plot, if the data points largely follow the straight line, then the normality assumption is reasonable.
+
+- **Homoscedasticity**: If the "Residuals vs Fitted" plot shows a funnel shape, we may have non-constant variances (heteroscedasticity). 
+
+Based on these plots, we can decide if further transformation or different modeling techniques are necessary.
+
+
+--------------------------------
+
+```{r}
+feature_df <- df[, c("BODYFAT", "AGE", "WEIGHT", "HEIGHT", "NECK", "CHEST", "ABDOMEN", "HIP", "THIGH", "KNEE", "ANKLE", "BICEPS", "FOREARM", "WRIST")]
+```
+## Correlation Analysis with all features
+
+Before proceeding to model building, it's important to examine the correlations among the predictors. This helps us to understand the relationships between different variables and also to detect multicollinearity, which can be problematic in linear regression models.
+
+### Correlation Matrix
+
+We will start by computing the correlation matrix for our selected features.
+
+```{r echo=TRUE}
+# Compute the correlation matrix
+cor_matrix <- cor(feature_df)  # Excluding the "BODYFAT" column
+cor_matrix
+```
+
+### Visualization with Heatmap
+
+To make it easier to interpret these correlations, we'll visualize them using a heatmap.
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+# Load the required package
+if(!requireNamespace("ggcorrplot", quietly = TRUE)) {
+  install.packages("ggcorrplot")
+}
+library(ggcorrplot)
+
+# Generate the heatmap
+ggcorrplot(cor_matrix, hc.order = TRUE, type = "lower",
+           lab = TRUE, lab_size = 3, method="circle", 
+           colors = c("#6D9EC1", "white", "#E46726"))
+```
+
+### Interpretation
+
+- **Highly correlated variables**: If two predictors are highly correlated, say above 0.9 or below -0.9, it suggests that one can be predicted from the other with high accuracy, and they are likely to carry similar information. 
+
+- **Low or Zero correlations**: Variables with low or zero correlations are generally preferable as they provide unique information for prediction.
+
+Based on the heatmap and the correlation matrix, we can decide whether or not to keep all the predictors for our linear regression model.
+
+----------------------------------
+
